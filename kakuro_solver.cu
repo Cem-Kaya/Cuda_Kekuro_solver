@@ -11,7 +11,7 @@
 #include <vector>
 #include <array>
 //#include <bits/stdc++.h>
-
+#include <chrono>
 #include <cuda.h>
 
 using namespace std;
@@ -381,7 +381,7 @@ struct my_gpu_stack {
 	int maxSize;
 	state_data* data;
 
-	__device__ my_gpu_stack(int max) : top(-1), maxSize(max*10) {
+	__device__ my_gpu_stack(int max) : top(-1), maxSize(max*2) {
 		data = new state_data[maxSize];
 	}
 
@@ -394,7 +394,13 @@ struct my_gpu_stack {
 			data[++top] = value;
 		}
 		else {
-			printf("Stack Overflow\n");
+			int newMaxSize = 2 * maxSize;
+			state_data* newData = new state_data[newMaxSize];
+			memcpy(newData, data, sizeof(state_data) * maxSize);
+			delete[] data;
+			data = newData;
+			maxSize = newMaxSize;
+			data[++top] = value;
 		}
 	}
 
@@ -485,12 +491,16 @@ __device__ int sum_a_spesific_sum(int* d_sol_mat, int* d_sum_starts_x, int* d_su
 	int sum_of_sum = 0;
 	if (dir == 0) {
 		for (int j = start_x; j < end_x; j++) {
-			sum_of_sum += d_sol_mat[j * n + start_y];
-		}
+			if (d_sol_mat[j * n + start_y] != -2) {
+				sum_of_sum += d_sol_mat[j * n + start_y];
+			}
+		}			
 	}
 	else {
 		for (int j = start_y; j < end_y; j++) {
-			sum_of_sum += d_sol_mat[start_x * n + j];
+			if (d_sol_mat[start_x * n + j] != -2) {
+				sum_of_sum += d_sol_mat[start_x * n + j];
+			}			
 		}
 	}
 	return sum_of_sum;
@@ -590,34 +600,32 @@ __global__ void kakuro_kernel(
 	my_gpu_stack stack(no_sums);
 	copy_mat(d_sol_mat, this_threads_mat, MAT_SIZE / sizeof(int));
 	__syncthreads();
-
-	for (int i = 0; i < no_sums; i++) {
-		printf(" hints : %d \n", d_sum_hints[i]);
-	}
-
-	d_print_flattened_matrix(this_threads_mat, m, n);
-	int cur_ind = 0;
-
+	// Apply this threads starting partial solution 
+	int tmp_zero = 0;
+	int tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
+	//100 000 
+	this_threads_mat[tmp_cord_change] = thread_id%10 ;
+	tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
+	this_threads_mat[tmp_cord_change] = (thread_id / 10) % 10;
+	tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
+	this_threads_mat[tmp_cord_change] = (thread_id / 100) % 10;
 
 	// Initial state
-
+	int cur_ind = 0;
 	int tmp = get_cord_to_change(cur_ind, MAT_SIZE / sizeof(int), this_threads_mat);
 
 	int i = 1;
 	stack.push(state_data(tmp / m, tmp % n, i));
 
-	printf("Hints :");
-	for (int i = 0; i < no_sums; i++) {
-		printf(" %d ", d_sum_hints[i]);
-	}
+	
 
 	int* cord_to_sum_lookup = make_lookup_table(d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, m, n);
 
-	printf("\n TABLe \n");
-	d_print_flattened_matrix(cord_to_sum_lookup, m, n);
-	printf("\n TABLe2 \n");
-	d_print_flattened_matrix(cord_to_sum_lookup + m * n, m, n);
-	printf("\n TABLe \n");
+	//printf("\n TABLe \n");
+	//d_print_flattened_matrix(cord_to_sum_lookup, m, n);
+	//printf("\n TABLe2 \n");
+	//d_print_flattened_matrix(cord_to_sum_lookup + m * n, m, n);
+	//printf("\n TABLe \n");
 
 
 	/////////
@@ -636,18 +644,13 @@ __global__ void kakuro_kernel(
 
 
 	while (!stack.is_empty()  ) {
-		d_print_flattened_matrix(this_threads_mat, m, n);
-		//	tie(next_cord, sums_index, i) = callStack.top();
-		//	callStack.pop();
+		//d_print_flattened_matrix(this_threads_mat, m, n);
+				
 		state_data cur = stack.pop();
 		i = cur.val;
 		int zero = 0;
 		int is_at_leaf = get_cord_to_change(zero, MAT_SIZE / sizeof(int), this_threads_mat);
-		//	if (sums_index == -1) {
-		//		if (is_all_sums_valid(sums, sol_mat)) {
-		//			return true;
-		//		}
-		//	}
+		
 		if (is_at_leaf == -10) {
 			if (check_all_the_sums_are_correct(this_threads_mat, d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, m, n)) {
 				*solved = true;
@@ -659,65 +662,44 @@ __global__ void kakuro_kernel(
 		if (i < 10) {
 			this_threads_mat[cur.x_cord * n + cur.y_cord] = i;
 			i++;
-			//Save the current state and push it back to the stack
 
-			state_data wil_be_puched = state_data(cur.x_cord, cur.y_cord, i);
-			stack.push(wil_be_puched);
+			// Pruning condition: Check if the related sums are still valid
+			int first_effected_sum  = cord_to_sum_lookup[cur.x_cord * n + cur.y_cord];
+			int second_effected_sum = cord_to_sum_lookup[cur.x_cord * n + cur.y_cord + m * n];
 
-			// Move on to the next state
-			zero = 0;
-			int next_sate = get_cord_to_change(zero, MAT_SIZE / sizeof(int), this_threads_mat);
-			if (next_sate != -10) {
-				i = 1;
-				stack.push(state_data(next_sate / m, next_sate % n, i));
+			bool viable = false;
+			if (check_singe_sum_is_Viable( this_threads_mat, d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y,  d_sum_hints, d_sum_lengths,  d_sum_dirs,  no_sums,  first_effected_sum,  m,  n) && 
+				check_singe_sum_is_Viable(this_threads_mat, d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, second_effected_sum, m, n) )
+			{
+				viable = true;
+			}	
+
+			if (viable) {
+				//Save the current state and push it back to the stack
+				state_data wil_be_pushed = state_data(cur.x_cord, cur.y_cord, i);
+				stack.push(wil_be_pushed);
+
+				// Move on to the next state
+				zero = 0;
+				int next_sate = get_cord_to_change(zero, MAT_SIZE / sizeof(int), this_threads_mat);
+				if (next_sate != -10) {
+					i = 1;
+					stack.push(state_data(next_sate / m, next_sate % n, i));
+				}
+			}			
+			else {
+				// Reset the current cell when backtracking
+				//sol_mat[next_cord.first][next_cord.second] = -2;
+				this_threads_mat[cur.x_cord * n + cur.y_cord] = -2;
+				//callStack.push(make_tuple(next_cord, sums_index, i));
+				stack.push(state_data(cur.x_cord, cur.y_cord, 10)); // skip the line
 			}
+
+
 		}
-		else {
-			// Reset the cell to its initial value when backtracking
-			//sol_mat[next_cord.first][next_cord.second] = -2;
+		else {			
 			this_threads_mat[cur.x_cord * n + cur.y_cord] = -2;
-		}
-
-		//	else {
-		//		if (i < 10) {
-		//			sol_mat[next_cord.first][next_cord.second] = i;
-		//			i++;
-
-		//			// Pruning condition: Check if the related sums are still valid
-		//			bool valid = true;
-		//			for (int j = 0; j < sums.size(); j++) {
-		//				if (contains(sums[j], next_cord)) {
-		//					if (!is_current_sum_valid(sol_mat, sums[j])) {
-		//						valid = false;
-		//						break;
-		//					}
-		//				}
-		//			}
-
-
-		//			if (valid) {
-		//				// Save the current state and push it back to the stack
-		//				callStack.push(make_tuple(next_cord, sums_index, i));
-
-		//				// Move on to the next state
-		//				tmp = get_cor(sums, sol_mat);
-		//				next_cord = get<0>(tmp);
-		//				sums_index = get<1>(tmp);
-		//				i = 1;
-		//				callStack.push(make_tuple(next_cord, sums_index, i));
-		//			}
-		//			else {
-		//				// Reset the current cell when backtracking
-		//				sol_mat[next_cord.first][next_cord.second] = -2;
-		//				callStack.push(make_tuple(next_cord, sums_index, i));
-		//			}
-		//		}
-		//		else {
-		//			// Reset the cell to its initial value when backtracking
-		//			sol_mat[next_cord.first][next_cord.second] = -2;
-		//		}
-		//	}
-		//}
+		}	
 		
 	}
 }
@@ -759,7 +741,7 @@ int main(int argc, char** argv) {
 
 
 	int grid_dim = 1;//TO DO
-	int block_dim = 1;//To DO
+	int block_dim = 1000;//To DO
 
 	int no_sums = sums.size();
 
@@ -824,6 +806,8 @@ int main(int argc, char** argv) {
 	cudaMemcpy(d_solved, solved, sizeof(bool), cudaMemcpyHostToDevice);
 
 
+	auto start = chrono::high_resolution_clock::now();
+
 	kakuro_kernel << <grid_dim, block_dim >> > (d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints,
 		d_sum_lengths, d_sum_dirs, d_sol_mat, d_perms, d_t_mats, m, n,
 		no_sums, d_solved);
@@ -831,6 +815,8 @@ int main(int argc, char** argv) {
 	//CUDA
 
 	cudaMemcpy(h_sol_mat, d_sol_mat, (m * n) * sizeof(int), cudaMemcpyDeviceToHost);
+	auto end = chrono::high_resolution_clock::now();
+	cout <<endl<< "Execution time: " << chrono::duration_cast<chrono::microseconds>(end - start).count() << "micro seconds" << endl;
 
 
 	print_flattened_matrix(h_sol_mat, m, n);
