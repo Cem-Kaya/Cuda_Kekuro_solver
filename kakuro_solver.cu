@@ -1,7 +1,7 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
-#include <stdio.h>
+//#include <stdio.h>
 
 #include <iostream>
 #include <string>
@@ -12,8 +12,8 @@
 #include <array>
 //#include <bits/stdc++.h>
 
-
 #include <cuda.h>
+
 using namespace std;
 
 enum direction { d_down, d_right, none };
@@ -484,12 +484,12 @@ __device__ int sum_a_spesific_sum(int* d_sol_mat, int* d_sum_starts_x, int* d_su
 	int dir = d_sum_dirs[spesific_sum_index];
 	int sum_of_sum = 0;
 	if (dir == 0) {
-		for (int j = start_x; j <= end_x; j++) {
+		for (int j = start_x; j < end_x; j++) {
 			sum_of_sum += d_sol_mat[j * n + start_y];
 		}
 	}
 	else {
-		for (int j = start_y; j <= end_y; j++) {
+		for (int j = start_y; j < end_y; j++) {
 			sum_of_sum += d_sol_mat[start_x * n + j];
 		}
 	}
@@ -605,7 +605,7 @@ __global__ void kakuro_kernel(
 
 	int i = 1;
 	stack.push(state_data(tmp / m, tmp % n, i));
-	
+
 	printf("Hints :");
 	for (int i = 0; i < no_sums; i++) {
 		printf(" %d ", d_sum_hints[i]);
@@ -613,107 +613,113 @@ __global__ void kakuro_kernel(
 
 	int* cord_to_sum_lookup = make_lookup_table(d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, m, n);
 
-	printf("\n TABLe \n");	
+	printf("\n TABLe \n");
 	d_print_flattened_matrix(cord_to_sum_lookup, m, n);
 	printf("\n TABLe2 \n");
 	d_print_flattened_matrix(cord_to_sum_lookup + m * n, m, n);
 	printf("\n TABLe \n");
+
+
+	/////////
+	/*this_threads_mat[4] = 4;
+	this_threads_mat[5] = 5;
+	this_threads_mat[7] = 3;
+	this_threads_mat[8] = 1;
+	d_print_flattened_matrix(this_threads_mat , m, n);*/
+
+	//bool che = check_all_the_sums_are_correct(this_threads_mat, d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, m, n);
+	//printf("che : %d \n", che);
 	
-	while (!stack.is_empty()) {
+	///////
+
+
+
+
+	while (!stack.is_empty()  ) {
 		d_print_flattened_matrix(this_threads_mat, m, n);
-
-
- 		int tttmp = 0;
-		int is_there_empthy_slot = get_cord_to_change(tttmp, MAT_SIZE / sizeof(int), this_threads_mat);
-		
-		// is at leaf node ?? 
-		if (is_there_empthy_slot == -10) {						
-			// TODO do stuff to check if solved and if not give the correct value to the stack 
+		//	tie(next_cord, sums_index, i) = callStack.top();
+		//	callStack.pop();
+		state_data cur = stack.pop();
+		i = cur.val;
+		int zero = 0;
+		int is_at_leaf = get_cord_to_change(zero, MAT_SIZE / sizeof(int), this_threads_mat);
+		//	if (sums_index == -1) {
+		//		if (is_all_sums_valid(sums, sol_mat)) {
+		//			return true;
+		//		}
+		//	}
+		if (is_at_leaf == -10) {
 			if (check_all_the_sums_are_correct(this_threads_mat, d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, m, n)) {
 				*solved = true;
-				return;
-			}
-			else {
-				// TODO add viablitiy check here 
-				state_data cur = stack.pop();
-				i = cur.val;
-				if (i < 10) {
-					this_threads_mat[cur.x_cord * m + cur.y_cord] = i;
-					i++; // next iterations value
-					stack.push(state_data(cur.x_cord, cur.y_cord, i));
-				}
-				else {
-					this_threads_mat[cur.x_cord * m + cur.y_cord] = -2;					
-				}				
-			} 
-		}		
-		else {
-			state_data cur = stack.pop();
-			i = cur.val;
-			if (cur.val < 10) {
-				this_threads_mat[cur.x_cord * m + cur.y_cord] = i;
-				i++; // next iterations value
-
-				// Pruning condition: Check if the related sums are still valid
-				bool Viable = false;
-				// get inpacted sums and check if they are valid
-				int first_effected_sum_index = cord_to_sum_lookup[cur.x_cord * m + cur.y_cord];
-				int second_effected_sum_index = cord_to_sum_lookup[cur.x_cord * m + cur.y_cord + m * n];
-				printf(" %d  %d \n ", first_effected_sum_index, second_effected_sum_index);
-				if (check_singe_sum_is_Viable(this_threads_mat, d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, first_effected_sum_index, m, n) 
-					&& check_singe_sum_is_Viable(this_threads_mat, d_sum_starts_x,  d_sum_starts_y, d_sum_ends_x,  d_sum_ends_y,  d_sum_hints, d_sum_lengths,d_sum_dirs, no_sums, second_effected_sum_index,  m,  n) )
-				{
-					Viable = true;
-				}
-
-				if (Viable) {
-					// Save the current state and push it back to the stack
-					stack.push(state_data(cur.x_cord, cur.y_cord, i));
-
-					int tttmp = 0;
-					// Move on to the next state
-					tmp = get_cord_to_change(tttmp, MAT_SIZE / sizeof(int), this_threads_mat);
-					//next_cord = get<0>(tmp);
-					//sums_index = get<1>(tmp);
-					i = 1;
-					stack.push(state_data(tmp / m, tmp % n, i));;
-				}
-				else {
-					// Reset the current cell when backtracking
-					this_threads_mat[cur.x_cord * m + cur.y_cord] = -2;
-					//stack.push(state_data(next_cord, sums_index, i));
-					stack.push(state_data(cur.x_cord, cur.y_cord, i));;
-
-				}
-			}
-			else {
-				// Reset the cell to its initial value when backtracking
-				this_threads_mat[cur.x_cord * m + cur.y_cord] = -2;
+				printf("#############################");
+				return;				
 			}
 		}
-		////////////
+		
+		if (i < 10) {
+			this_threads_mat[cur.x_cord * n + cur.y_cord] = i;
+			i++;
+			//Save the current state and push it back to the stack
+
+			state_data wil_be_puched = state_data(cur.x_cord, cur.y_cord, i);
+			stack.push(wil_be_puched);
+
+			// Move on to the next state
+			zero = 0;
+			int next_sate = get_cord_to_change(zero, MAT_SIZE / sizeof(int), this_threads_mat);
+			if (next_sate != -10) {
+				i = 1;
+				stack.push(state_data(next_sate / m, next_sate % n, i));
+			}
+		}
+		else {
+			// Reset the cell to its initial value when backtracking
+			//sol_mat[next_cord.first][next_cord.second] = -2;
+			this_threads_mat[cur.x_cord * n + cur.y_cord] = -2;
+		}
+
+		//	else {
+		//		if (i < 10) {
+		//			sol_mat[next_cord.first][next_cord.second] = i;
+		//			i++;
+
+		//			// Pruning condition: Check if the related sums are still valid
+		//			bool valid = true;
+		//			for (int j = 0; j < sums.size(); j++) {
+		//				if (contains(sums[j], next_cord)) {
+		//					if (!is_current_sum_valid(sol_mat, sums[j])) {
+		//						valid = false;
+		//						break;
+		//					}
+		//				}
+		//			}
 
 
+		//			if (valid) {
+		//				// Save the current state and push it back to the stack
+		//				callStack.push(make_tuple(next_cord, sums_index, i));
 
-
-
-
-
-
-
-
-
-
-
-
-
-		//About volatile bool* solved:
-		//You can get idea from https://stackoverflow.com/questions/12505750/how-can-a-global-function-return-a-value-or-break-out-like-c-c-does%5B/url%5D for how to break out of a CUDA kernel
-		//You may or may not use it
-
+		//				// Move on to the next state
+		//				tmp = get_cor(sums, sol_mat);
+		//				next_cord = get<0>(tmp);
+		//				sums_index = get<1>(tmp);
+		//				i = 1;
+		//				callStack.push(make_tuple(next_cord, sums_index, i));
+		//			}
+		//			else {
+		//				// Reset the current cell when backtracking
+		//				sol_mat[next_cord.first][next_cord.second] = -2;
+		//				callStack.push(make_tuple(next_cord, sums_index, i));
+		//			}
+		//		}
+		//		else {
+		//			// Reset the cell to its initial value when backtracking
+		//			sol_mat[next_cord.first][next_cord.second] = -2;
+		//		}
+		//	}
+		//}
+		
 	}
-	
-
 }
 ///////////////////
 //CUDA FUNCTIONS //
