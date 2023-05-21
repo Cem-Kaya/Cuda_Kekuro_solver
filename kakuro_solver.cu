@@ -369,55 +369,13 @@ __device__ void copy_mat(int* from, int* to, int last_index) {
 }
 
 struct state_data {
-	int x_cord;
-	int y_cord;
-	int val;
+	short x_cord;
+	short y_cord;
+	short val;
 	__device__ state_data() : x_cord(-10), y_cord(-10), val(-10) {}
-	__device__ state_data(int x, int y, int v) : x_cord(x), y_cord(y), val(v) {}
+	__device__ state_data(short x, short y, short v) : x_cord(x), y_cord(y), val(v) {}
 };
 
-struct my_gpu_stack {
-	int top;
-	int maxSize;
-	state_data* data;
-
-	__device__ my_gpu_stack(int max) : top(-1), maxSize(max*2) {
-		data = new state_data[maxSize];
-	}
-
-	__device__ ~my_gpu_stack() {
-		delete[] data;
-	}
-
-	__device__ void push(state_data value) {
-		if (top < maxSize - 1) {
-			data[++top] = value;
-		}
-		else {
-			int newMaxSize = 2 * maxSize;
-			state_data* newData = new state_data[newMaxSize];
-			memcpy(newData, data, sizeof(state_data) * maxSize);
-			delete[] data;
-			data = newData;
-			maxSize = newMaxSize;
-			data[++top] = value;
-		}
-	}
-
-	__device__ state_data pop() {
-		if (top >= 0) {
-			return data[top--];
-		}
-		else {
-			printf("Stack Underflow\n");
-			return state_data();
-		}
-	}
-
-	__device__ bool is_empty() {
-		return top == -1;
-	}
-};
 
 __device__ bool check_a_spesific_sum_if_contains_duplicates(int* d_sol_mat, int* d_sum_starts_x, int* d_sum_starts_y, int* d_sum_ends_x, int* d_sum_ends_y, int* d_sum_hints, int* d_sum_lengths, int* d_sum_dirs, int no_sums, int spesific_sum_index, int m, int n) {
 	int start_x = d_sum_starts_x[spesific_sum_index];
@@ -462,7 +420,7 @@ __device__ bool check_a_spesific_sum_if_contains_2(int* d_sol_mat, int* d_sum_st
 	bool does_contain_2 = false;
 	if (dir == 0) {
 		for (int j = start_x; j <= end_x; j++) {
-			if (d_sol_mat[j * n + start_y] == -2) {
+			if (d_sol_mat[j * n + start_y] == -2 || d_sol_mat[j * n + start_y] == 0 ) {
 				does_contain_2 = true;
 				return does_contain_2;
 			}
@@ -470,7 +428,7 @@ __device__ bool check_a_spesific_sum_if_contains_2(int* d_sol_mat, int* d_sum_st
 	}
 	else {
 		for (int j = start_y; j <= end_y; j++) {
-			if (d_sol_mat[start_x * n + j] == -2) {
+			if (d_sol_mat[start_x * n + j] == -2 || d_sol_mat[start_x * n + j] == 0 ) {
 				does_contain_2 = true;
 				return does_contain_2;
 			}
@@ -592,34 +550,105 @@ __global__ void kakuro_kernel(
 	int* d_sum_starts_x, int* d_sum_starts_y, int* d_sum_ends_x, int* d_sum_ends_y, int* d_sum_hints, int* d_sum_lengths, int* d_sum_dirs,
 	int* d_sol_mat, int* d_perms,
 	int* d_t_mats, int m, int n,
-	int no_sums, volatile bool* solved) {
+	int no_sums, volatile bool* solved , state_data* d_t_stack   ) {
 	//TO DO
 	const int MAT_SIZE = m * n * sizeof(int);
 	int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-	int* this_threads_mat = d_t_mats + thread_id * MAT_SIZE;
-	my_gpu_stack stack(no_sums);
+	int* this_threads_mat = d_t_mats + thread_id * MAT_SIZE/ sizeof(int); // pointer arithmetic on ints moves 4 bytes not a void pointer in this oen !!
+	
+	
+	state_data * this_threads_stack = d_t_stack + thread_id * m * n  ;
+	int this_threads_stack_size = 0;
+	//my_gpu_stack stack(m*n);
+	
+
 	copy_mat(d_sol_mat, this_threads_mat, MAT_SIZE / sizeof(int));
 	__syncthreads();
+
+	//int* cord_to_sum_lookup = make_lookup_table(d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, m, n);
+	
+	extern __shared__ int cord_to_sum_lookup[];
+	int thread_x = threadIdx.x;	
+	if (thread_x  == 1 ) {
+		for (int t = 0; t < m * n * 2; t++) {			
+			cord_to_sum_lookup[t] = -1;
+		}
+		for (int i = 0; i < no_sums; i++) {
+			int start_x = d_sum_starts_x[i];
+			int start_y = d_sum_starts_y[i];
+			int end_x = d_sum_ends_x[i];
+			int end_y = d_sum_ends_y[i];
+			int dir = d_sum_dirs[i];
+			if (dir == 1) { // if direction is down
+				for (int j = start_y; j < end_y; j++) {
+					int index = (start_x * n + j);
+					if (cord_to_sum_lookup[index] == -1) {
+						cord_to_sum_lookup[index] = i;
+					}
+					else {
+						cord_to_sum_lookup[index + m * n] = i; // tune this 
+					}
+				}
+			}
+			else { // if direction is right
+				for (int j = start_x; j < end_x; j++) {
+					int index = (j * n + start_y);
+					if (cord_to_sum_lookup[index] == -1) {
+						cord_to_sum_lookup[index] = i;
+					}
+					else {
+						cord_to_sum_lookup[index + m * n] = i;
+					}
+				}
+			}
+
+		}
+	}
+	__syncthreads();
+	
+	
+
+
+
+
 	// Apply this threads starting partial solution 
 	int tmp_zero = 0;
 	int tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
 	//100 000 
 	this_threads_mat[tmp_cord_change] = thread_id%10 ;
+	
+	
 	tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
 	this_threads_mat[tmp_cord_change] = (thread_id / 10) % 10;
+	
 	tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
 	this_threads_mat[tmp_cord_change] = (thread_id / 100) % 10;
+	
+	tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
+	this_threads_mat[tmp_cord_change] = (thread_id / 1000) % 10;
+	
+	//tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
+	//this_threads_mat[tmp_cord_change] = (thread_id / 10000) % 10;
+
+
+	// stream seed
+	//tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
+	//this_threads_mat[tmp_cord_change] = (st ) % 10;
+
+	//tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
+	//this_threads_mat[tmp_cord_change] = (st/10 ) % 10;
+
+
 
 	// Initial state
 	int cur_ind = 0;
 	int tmp = get_cord_to_change(cur_ind, MAT_SIZE / sizeof(int), this_threads_mat);
 
 	int i = 1;
-	stack.push(state_data(tmp / m, tmp % n, i));
-
+	//stack.push(state_data(tmp / m, tmp % n, i));
+	this_threads_stack[this_threads_stack_size] = state_data(tmp / m, tmp % n, i);
+	this_threads_stack_size++;
 	
-
-	int* cord_to_sum_lookup = make_lookup_table(d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, m, n);
 
 	//printf("\n TABLe \n");
 	//d_print_flattened_matrix(cord_to_sum_lookup, m, n);
@@ -641,68 +670,85 @@ __global__ void kakuro_kernel(
 	///////
 
 
-
-
-	while (!stack.is_empty()  ) {
+	//About volatile bool* solved:
+	//You can get idea from https://stackoverflow.com/questions/12505750/how-can-a-global-function-return-a-value-or-break-out-like-c-c-does%5B/url%5D for how to break out of a CUDA kernel
+	//You may or may not use it
+	//printf("solved ,%d \n", (*solved));
+	while ( (this_threads_stack_size>0) && !(*solved) ) {
 		//d_print_flattened_matrix(this_threads_mat, m, n);
-				
-		state_data cur = stack.pop();
+
+		//state_data cur = stack.pop();
+		state_data cur = this_threads_stack[this_threads_stack_size - 1];
+		this_threads_stack_size--;
+
 		i = cur.val;
 		int zero = 0;
 		int is_at_leaf = get_cord_to_change(zero, MAT_SIZE / sizeof(int), this_threads_mat);
-		
+
 		if (is_at_leaf == -10) {
 			if (check_all_the_sums_are_correct(this_threads_mat, d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, m, n)) {
 				*solved = true;
+				// copy the solution to the global memory
+				copy_mat(this_threads_mat, d_sol_mat, MAT_SIZE / sizeof(int));
+
 				printf("#############################");
-				return;				
+				return;
 			}
 		}
-		
+
 		if (i < 10) {
 			this_threads_mat[cur.x_cord * n + cur.y_cord] = i;
 			i++;
 
 			// Pruning condition: Check if the related sums are still valid
-			int first_effected_sum  = cord_to_sum_lookup[cur.x_cord * n + cur.y_cord];
+			int first_effected_sum = cord_to_sum_lookup[cur.x_cord * n + cur.y_cord];
 			int second_effected_sum = cord_to_sum_lookup[cur.x_cord * n + cur.y_cord + m * n];
 
 			bool viable = false;
-			if (check_singe_sum_is_Viable( this_threads_mat, d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y,  d_sum_hints, d_sum_lengths,  d_sum_dirs,  no_sums,  first_effected_sum,  m,  n) && 
-				check_singe_sum_is_Viable(this_threads_mat, d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, second_effected_sum, m, n) )
+			if (check_singe_sum_is_Viable(this_threads_mat, d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, first_effected_sum, m, n) &&
+				check_singe_sum_is_Viable(this_threads_mat, d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, second_effected_sum, m, n))
 			{
 				viable = true;
-			}	
+			}
 
 			if (viable) {
 				//Save the current state and push it back to the stack
 				state_data wil_be_pushed = state_data(cur.x_cord, cur.y_cord, i);
-				stack.push(wil_be_pushed);
+				//stack.push(wil_be_pushed);
+				this_threads_stack [this_threads_stack_size] = wil_be_pushed;
+				this_threads_stack_size++;
 
 				// Move on to the next state
 				zero = 0;
 				int next_sate = get_cord_to_change(zero, MAT_SIZE / sizeof(int), this_threads_mat);
 				if (next_sate != -10) {
 					i = 1;
-					stack.push(state_data(next_sate / m, next_sate % n, i));
+					//stack.push(state_data(next_sate / m, next_sate % n, i));
+					this_threads_stack[this_threads_stack_size] = state_data(next_sate / m, next_sate % n, i);
+					this_threads_stack_size++;
 				}
-			}			
+			}
 			else {
 				// Reset the current cell when backtracking
 				//sol_mat[next_cord.first][next_cord.second] = -2;
 				this_threads_mat[cur.x_cord * n + cur.y_cord] = -2;
 				//callStack.push(make_tuple(next_cord, sums_index, i));
-				stack.push(state_data(cur.x_cord, cur.y_cord, 10)); // skip the line
+				//stack.push(state_data(cur.x_cord, cur.y_cord, 10)); // skip the line
+				this_threads_stack[this_threads_stack_size] = state_data(cur.x_cord, cur.y_cord, 10);
+				this_threads_stack_size++;
+
 			}
 
 
 		}
-		else {			
+		else {
 			this_threads_mat[cur.x_cord * n + cur.y_cord] = -2;
-		}	
-		
+		}
+
 	}
 }
+
+
 ///////////////////
 //CUDA FUNCTIONS //
 ///////////////////
@@ -740,8 +786,8 @@ int main(int argc, char** argv) {
 
 
 
-	int grid_dim = 1;//TO DO
-	int block_dim = 1000;//To DO
+	int grid_dim = 100;//TO DO
+	int block_dim = 100;//To DO
 
 	int no_sums = sums.size();
 
@@ -785,6 +831,9 @@ int main(int argc, char** argv) {
 	//You may use this array if you will implement a thread-wise solution
 
 	cudaMalloc(&d_perms, sizeof(int));// not sure what to do wiht this one here 
+	state_data* d_t_stack; 
+	cudaMalloc(&d_t_stack, (m * n * grid_dim * block_dim) * sizeof(state_data)); //Allocating invidual stack for each GPU thread
+
 
 	cudaMemcpy(d_sum_starts_x, h_sum_starts_x, no_sums * sizeof(int), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_sum_starts_y, h_sum_starts_y, no_sums * sizeof(int), cudaMemcpyHostToDevice);
@@ -808,21 +857,60 @@ int main(int argc, char** argv) {
 
 	auto start = chrono::high_resolution_clock::now();
 
-	kakuro_kernel << <grid_dim, block_dim >> > (d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints,
-		d_sum_lengths, d_sum_dirs, d_sol_mat, d_perms, d_t_mats, m, n,
-		no_sums, d_solved);
+
+	// Define the number of streams
+	int num_streams = 100;
+
+	// Allocate an array of streams
+	cudaStream_t* streams = (cudaStream_t*)malloc(num_streams * sizeof(cudaStream_t));
+
+	// Create the streams
+	for (int i = 0; i < num_streams; i++) {
+		cudaStreamCreate(&streams[i]);
+	}
+
+	// Launch kernels in each stream
+	
+		kakuro_kernel << <grid_dim, block_dim, m* n * 2 * sizeof(int)   >> > 
+			(d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints,
+			d_sum_lengths, d_sum_dirs, d_sol_mat, d_perms, d_t_mats, m, n,
+			no_sums, d_solved, d_t_stack  );
+	// Synchronize the streams
+	for (int i = 0; i < num_streams; i++) {
+		cudaStreamSynchronize(streams[i]);
+	}
+
+	// Destroy the streams
+	for (int i = 0; i < num_streams; i++) {
+		cudaStreamDestroy(streams[i]);
+	}
+
+	free(streams);
+
+
+	
 	cudaDeviceSynchronize();
 	//CUDA
+	cudaMemcpy(h_sol_mat, d_sol_mat, (m* n) * sizeof(int), cudaMemcpyDeviceToHost);
 
-	cudaMemcpy(h_sol_mat, d_sol_mat, (m * n) * sizeof(int), cudaMemcpyDeviceToHost);
+
+
+
+
+
+
+
 	auto end = chrono::high_resolution_clock::now();
 	cout <<endl<< "Execution time: " << chrono::duration_cast<chrono::microseconds>(end - start).count() << "micro seconds" << endl;
-
-
+	cudaError err = cudaGetLastError();
+	
 	print_flattened_matrix(h_sol_mat, m, n);
 	// 
 	//TO DO sol_mat_flattened_to_file(mat, d_sol_mat, m, n)
 	//Similiar to sol_mat, use hints from mat and values from d_sol_mat
+	if (err != cudaSuccess)
+		printf("Error: %s\n", cudaGetErrorString(err));
+
 
 	for (int i = 0; i < n; i++) {
 		delete mat[i];
