@@ -337,6 +337,28 @@ void print_flattened_matrix(int* h_sol_mat, int m, int n) {
 	cout << endl;
 }
 
+void flattened_sol_to_file(int** h_mat,int* h_sol_mat, int m, int n) {
+
+	string fname = "visualize.kakuro";
+	ofstream to_write(fname);
+
+	to_write << m << " " << n << "\n";
+
+	for (int i = 0; i < m; i++) {
+		for (int j = 0; j < n; j++) {
+			if (h_mat[i][j] != -2)
+				to_write << h_mat[i][j] << " ";
+			else
+				to_write << h_sol_mat[i * n + j] << " ";
+		}
+		to_write << "\n";
+	}
+
+	to_write.close();
+}
+
+
+
 ///////////////////////////////////////////////////
 //Auxiliary functions for preparing CUDA setting //
 ///////////////////////////////////////////////////
@@ -918,6 +940,11 @@ int main(int argc, char** argv) {
 	// 
 	//TO DO sol_mat_flattened_to_file(mat, d_sol_mat, m, n)
 	//Similiar to sol_mat, use hints from mat and values from d_sol_mat
+	//sol_to_file(mat, sol_mat, m, n, "solution.kakuro");
+	// sol_to_file(int** mat, int** sol_mat, int m, int n) 
+	flattened_sol_to_file(mat,  h_sol_mat,  m,  n);
+
+
 	if (err != cudaSuccess)
 		printf("Error: %s\n", cudaGetErrorString(err));
 
