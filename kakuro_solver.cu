@@ -14,6 +14,10 @@
 #include <chrono>
 #include <cuda.h>
 
+#define GRID_DIM 1000
+#define BLOCK_DIM 10
+#define STREAM_NUM 10
+
 using namespace std;
 
 enum direction { d_down, d_right, none };
@@ -420,7 +424,7 @@ __device__ bool check_a_spesific_sum_if_contains_2(int* d_sol_mat, int* d_sum_st
 	bool does_contain_2 = false;
 	if (dir == 0) {
 		for (int j = start_x; j <= end_x; j++) {
-			if (d_sol_mat[j * n + start_y] == -2 || d_sol_mat[j * n + start_y] == 0 ) {
+			if (d_sol_mat[j * n + start_y] == -2 || d_sol_mat[j * n + start_y] == 0) {
 				does_contain_2 = true;
 				return does_contain_2;
 			}
@@ -428,7 +432,7 @@ __device__ bool check_a_spesific_sum_if_contains_2(int* d_sol_mat, int* d_sum_st
 	}
 	else {
 		for (int j = start_y; j <= end_y; j++) {
-			if (d_sol_mat[start_x * n + j] == -2 || d_sol_mat[start_x * n + j] == 0 ) {
+			if (d_sol_mat[start_x * n + j] == -2 || d_sol_mat[start_x * n + j] == 0) {
 				does_contain_2 = true;
 				return does_contain_2;
 			}
@@ -452,13 +456,13 @@ __device__ int sum_a_spesific_sum(int* d_sol_mat, int* d_sum_starts_x, int* d_su
 			if (d_sol_mat[j * n + start_y] != -2) {
 				sum_of_sum += d_sol_mat[j * n + start_y];
 			}
-		}			
+		}
 	}
 	else {
 		for (int j = start_y; j < end_y; j++) {
 			if (d_sol_mat[start_x * n + j] != -2) {
 				sum_of_sum += d_sol_mat[start_x * n + j];
-			}			
+			}
 		}
 	}
 	return sum_of_sum;
@@ -519,8 +523,8 @@ __device__ int* make_lookup_table(int* d_sum_starts_x, int* d_sum_starts_y, int*
 		int end_y = d_sum_ends_y[i];
 		int dir = d_sum_dirs[i];
 		if (dir == 1) { // if direction is down
-			for (int j = start_y; j < end_y ; j++) {
-				int index = (start_x * n + j) ;
+			for (int j = start_y; j < end_y; j++) {
+				int index = (start_x * n + j);
 				if (lookup_table[index] == -1) {
 					lookup_table[index] = i;
 				}
@@ -530,13 +534,13 @@ __device__ int* make_lookup_table(int* d_sum_starts_x, int* d_sum_starts_y, int*
 			}
 		}
 		else { // if direction is right
-			for (int j = start_x; j < end_x ; j++) {
+			for (int j = start_x; j < end_x; j++) {
 				int index = (j * n + start_y);
 				if (lookup_table[index] == -1) {
 					lookup_table[index] = i;
 				}
 				else {
-					lookup_table[index + m*n ] = i;
+					lookup_table[index + m * n] = i;
 				}
 			}
 		}
@@ -550,27 +554,27 @@ __global__ void kakuro_kernel(
 	int* d_sum_starts_x, int* d_sum_starts_y, int* d_sum_ends_x, int* d_sum_ends_y, int* d_sum_hints, int* d_sum_lengths, int* d_sum_dirs,
 	int* d_sol_mat, int* d_perms,
 	int* d_t_mats, int m, int n,
-	int no_sums, volatile bool* solved , state_data* d_t_stack   ) {
+	int no_sums, volatile bool* solved, state_data* d_t_stack, int st) {
 	//TO DO
 	const int MAT_SIZE = m * n * sizeof(int);
 	int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-	int* this_threads_mat = d_t_mats + thread_id * MAT_SIZE/ sizeof(int); // pointer arithmetic on ints moves 4 bytes not a void pointer in this oen !!
-	
-	
-	state_data * this_threads_stack = d_t_stack + thread_id * m * n  ;
+	int* this_threads_mat = d_t_mats + thread_id * MAT_SIZE / sizeof(int) + BLOCK_DIM * GRID_DIM * st; // pointer arithmetic on ints moves 4 bytes not a void pointer in this oen !!
+
+
+	state_data* this_threads_stack = d_t_stack + thread_id * m * n + BLOCK_DIM * GRID_DIM * st;
 	int this_threads_stack_size = 0;
 	//my_gpu_stack stack(m*n);
-	
+
 
 	copy_mat(d_sol_mat, this_threads_mat, MAT_SIZE / sizeof(int));
 	__syncthreads();
 
 	//int* cord_to_sum_lookup = make_lookup_table(d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, m, n);
-	
+
 	extern __shared__ int cord_to_sum_lookup[];
-	int thread_x = threadIdx.x;	
-	if (thread_x  == 1 ) {
-		for (int t = 0; t < m * n * 2; t++) {			
+	int thread_x = threadIdx.x;
+	if (thread_x == 1) {
+		for (int t = 0; t < m * n * 2; t++) {
 			cord_to_sum_lookup[t] = -1;
 		}
 		for (int i = 0; i < no_sums; i++) {
@@ -605,8 +609,8 @@ __global__ void kakuro_kernel(
 		}
 	}
 	__syncthreads();
-	
-	
+
+
 
 
 
@@ -615,25 +619,25 @@ __global__ void kakuro_kernel(
 	int tmp_zero = 0;
 	int tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
 	//100 000 
-	this_threads_mat[tmp_cord_change] = thread_id%10 ;
-	
-	
+	this_threads_mat[tmp_cord_change] = thread_id % 10;
+
+
 	tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
 	this_threads_mat[tmp_cord_change] = (thread_id / 10) % 10;
-	
+
 	tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
 	this_threads_mat[tmp_cord_change] = (thread_id / 100) % 10;
-	
+
 	tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
 	this_threads_mat[tmp_cord_change] = (thread_id / 1000) % 10;
-	
+
 	//tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
 	//this_threads_mat[tmp_cord_change] = (thread_id / 10000) % 10;
 
 
 	// stream seed
-	//tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
-	//this_threads_mat[tmp_cord_change] = (st ) % 10;
+	tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
+	this_threads_mat[tmp_cord_change] = (st) % 10;
 
 	//tmp_cord_change = get_cord_to_change(tmp_zero, MAT_SIZE / sizeof(int), this_threads_mat);
 	//this_threads_mat[tmp_cord_change] = (st/10 ) % 10;
@@ -648,7 +652,7 @@ __global__ void kakuro_kernel(
 	//stack.push(state_data(tmp / m, tmp % n, i));
 	this_threads_stack[this_threads_stack_size] = state_data(tmp / m, tmp % n, i);
 	this_threads_stack_size++;
-	
+
 
 	//printf("\n TABLe \n");
 	//d_print_flattened_matrix(cord_to_sum_lookup, m, n);
@@ -666,7 +670,7 @@ __global__ void kakuro_kernel(
 
 	//bool che = check_all_the_sums_are_correct(this_threads_mat, d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints, d_sum_lengths, d_sum_dirs, no_sums, m, n);
 	//printf("che : %d \n", che);
-	
+
 	///////
 
 
@@ -674,7 +678,7 @@ __global__ void kakuro_kernel(
 	//You can get idea from https://stackoverflow.com/questions/12505750/how-can-a-global-function-return-a-value-or-break-out-like-c-c-does%5B/url%5D for how to break out of a CUDA kernel
 	//You may or may not use it
 	//printf("solved ,%d \n", (*solved));
-	while ( (this_threads_stack_size>0) && !(*solved) ) {
+	while ((this_threads_stack_size > 0) && !(*solved)) {
 		//d_print_flattened_matrix(this_threads_mat, m, n);
 
 		//state_data cur = stack.pop();
@@ -715,7 +719,7 @@ __global__ void kakuro_kernel(
 				//Save the current state and push it back to the stack
 				state_data wil_be_pushed = state_data(cur.x_cord, cur.y_cord, i);
 				//stack.push(wil_be_pushed);
-				this_threads_stack [this_threads_stack_size] = wil_be_pushed;
+				this_threads_stack[this_threads_stack_size] = wil_be_pushed;
 				this_threads_stack_size++;
 
 				// Move on to the next state
@@ -755,6 +759,8 @@ __global__ void kakuro_kernel(
 
 int main(int argc, char** argv) {
 
+
+
 	std::string filename(argv[1]);
 	std::ifstream file;
 	file.open(filename.c_str());
@@ -786,8 +792,12 @@ int main(int argc, char** argv) {
 
 
 
-	int grid_dim = 100;//TO DO
-	int block_dim = 100;//To DO
+	int grid_dim = GRID_DIM;//TO DO
+	int block_dim = BLOCK_DIM;//To DO
+
+	// Define the number of streams
+	int num_streams = STREAM_NUM;
+
 
 	int no_sums = sums.size();
 
@@ -827,12 +837,12 @@ int main(int argc, char** argv) {
 	cudaMalloc(&d_sum_lengths, no_sums * sizeof(int));
 	cudaMalloc(&d_sum_dirs, no_sums * sizeof(int));
 	cudaMalloc(&d_sol_mat, (m * n) * sizeof(int));
-	cudaMalloc(&d_t_mats, (m * n * grid_dim * block_dim) * sizeof(int)); //Allocating invidual matrix for each GPU thread
+	cudaMalloc(&d_t_mats, (m * n * grid_dim * block_dim) * sizeof(int) * num_streams); //Allocating invidual matrix for each GPU thread
 	//You may use this array if you will implement a thread-wise solution
 
 	cudaMalloc(&d_perms, sizeof(int));// not sure what to do wiht this one here 
-	state_data* d_t_stack; 
-	cudaMalloc(&d_t_stack, (m * n * grid_dim * block_dim) * sizeof(state_data)); //Allocating invidual stack for each GPU thread
+	state_data* d_t_stack;
+	cudaMalloc(&d_t_stack, (m * n * grid_dim * block_dim) * sizeof(state_data) * num_streams); //Allocating invidual stack for each GPU thread
 
 
 	cudaMemcpy(d_sum_starts_x, h_sum_starts_x, no_sums * sizeof(int), cudaMemcpyHostToDevice);
@@ -858,23 +868,23 @@ int main(int argc, char** argv) {
 	auto start = chrono::high_resolution_clock::now();
 
 
-	// Define the number of streams
-	int num_streams = 100;
+
 
 	// Allocate an array of streams
 	cudaStream_t* streams = (cudaStream_t*)malloc(num_streams * sizeof(cudaStream_t));
 
 	// Create the streams
 	for (int i = 0; i < num_streams; i++) {
-		cudaStreamCreate(&streams[i]);
+		cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
 	}
 
 	// Launch kernels in each stream
-	
-		kakuro_kernel << <grid_dim, block_dim, m* n * 2 * sizeof(int)   >> > 
+	for (int st = 0; st < num_streams; st++) {
+		kakuro_kernel << <grid_dim, block_dim, m* n * 2 * sizeof(int) >> >
 			(d_sum_starts_x, d_sum_starts_y, d_sum_ends_x, d_sum_ends_y, d_sum_hints,
-			d_sum_lengths, d_sum_dirs, d_sol_mat, d_perms, d_t_mats, m, n,
-			no_sums, d_solved, d_t_stack  );
+				d_sum_lengths, d_sum_dirs, d_sol_mat, d_perms, d_t_mats, m, n,
+				no_sums, d_solved, d_t_stack, st);
+	}
 	// Synchronize the streams
 	for (int i = 0; i < num_streams; i++) {
 		cudaStreamSynchronize(streams[i]);
@@ -888,10 +898,10 @@ int main(int argc, char** argv) {
 	free(streams);
 
 
-	
+
 	cudaDeviceSynchronize();
 	//CUDA
-	cudaMemcpy(h_sol_mat, d_sol_mat, (m* n) * sizeof(int), cudaMemcpyDeviceToHost);
+	cudaMemcpy(h_sol_mat, d_sol_mat, (m * n) * sizeof(int), cudaMemcpyDeviceToHost);
 
 
 
@@ -901,9 +911,9 @@ int main(int argc, char** argv) {
 
 
 	auto end = chrono::high_resolution_clock::now();
-	cout <<endl<< "Execution time: " << chrono::duration_cast<chrono::microseconds>(end - start).count() << "micro seconds" << endl;
+	cout << endl << "Execution time: " << chrono::duration_cast<chrono::microseconds>(end - start).count() << "micro seconds" << endl;
 	cudaError err = cudaGetLastError();
-	
+
 	print_flattened_matrix(h_sol_mat, m, n);
 	// 
 	//TO DO sol_mat_flattened_to_file(mat, d_sol_mat, m, n)
